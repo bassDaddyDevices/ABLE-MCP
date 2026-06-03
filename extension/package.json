@@ -1,0 +1,25 @@
+{
+    "name": "able-mcp-extension",
+    "version": "0.1.0",
+    "type": "module",
+    "main": "dist/extension.cjs",
+    "private": true,
+    "scripts": {
+        "build": "tsc --noEmit && tsx build.ts",
+        "build:prod": "tsc --noEmit && tsx build.ts --production",
+        "package": "npm run build:prod && extensions-cli package -o ../dist/AbleMCP.ablx",
+        "smoke": "node tests/smoke.js"
+    },
+    "dependencies": {
+        "@ableton-extensions/sdk": "file:../extensions-sdk-1.0.0-beta.0/ableton-extensions-sdk-1.0.0-beta.0.tgz",
+        "ws": "8.21.0"
+    },
+    "devDependencies": {
+        "@ableton-extensions/cli": "file:../extensions-sdk-1.0.0-beta.0/ableton-extensions-cli-1.0.0-beta.0.tgz",
+        "@types/node": "22.10.2",
+        "@types/ws": "8.5.13",
+        "esbuild": "0.28.0",
+        "tsx": "4.22.4",
+        "typescript": "5.9.3"
+    }
+}

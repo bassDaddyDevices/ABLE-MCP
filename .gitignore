@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[oc]
+build/
+wheels/
+*.egg-info
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Virtual environments
+.venv
+.venv/
+
+# Built artifacts
+dist/
+extension/dist/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Local secrets / runtime
+extension/config.json
+*.config.local.json
+able-mcp.log
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Ableton
+*.als.bak
+Backup/
+
+AGENTS.md
+extensions-sdk-1.0.0-beta.0/
+LiveObjectModel.png
+renders/
