@@ -12,6 +12,13 @@ from .analysis import (
     guess_chords,
     note_stats,
 )
+from .complement import (
+    ExtractSummary,
+    GuideNote,
+    extract_guide_melody_from_wav,
+    generate_complementary_melody,
+    seconds_notes_to_beats,
+)
 
 __all__ = [
     "KeyEstimate",
@@ -20,4 +27,9 @@ __all__ = [
     "estimate_meter_density",
     "guess_chords",
     "note_stats",
+    "GuideNote",
+    "ExtractSummary",
+    "extract_guide_melody_from_wav",
+    "seconds_notes_to_beats",
+    "generate_complementary_melody",
 ]

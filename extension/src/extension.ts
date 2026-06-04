@@ -17,9 +17,7 @@ import * as path from "node:path";
 import { startRpcServer, type RpcServer } from "./rpc";
 import { buildMethods } from "./methods";
 import { registerMidiClipActions } from "./midiclipactions";
-// Audio actions are disabled in v1 (MIDI-only). Keep import path commented
-// for easy resurrection in v2.
-// import { registerAudioClipActions } from "./audioclipactions";
+import { registerAudioClipActions } from "./audioclipactions";
 
 // Find a writable place to log. The Extension Host is sandboxed, so we try
 // a few candidates and use the first one we can write to.
@@ -103,8 +101,8 @@ export function activate(activation: ActivationContext): void {
     // when our extension is installed normally (without Developer Mode).
     // Without at least one UI hook, Live unloads the host shortly after
     // activation, taking the WS bridge down with it.
-    // void registerAudioClipActions(context); // disabled for v1 (MIDI-only)
     void registerMidiClipActions(context);
+    void registerAudioClipActions(context);
 }
 
 async function registerContextMenus(

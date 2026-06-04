@@ -14,6 +14,21 @@ interface DecodedHead {
     mono: Float32Array;
 }
 
+export interface GuideNote {
+    pitch: number;
+    startSec: number;
+    durationSec: number;
+    velocity: number;
+}
+
+export interface ComplementOptions {
+    similarity: number;
+    density: number;
+    register: "low" | "mid" | "high";
+    callResponse: boolean;
+    seed: number | null;
+}
+
 const FORMAT_PCM = 1;
 const FORMAT_FLOAT = 3;
 const FORMAT_EXTENSIBLE = 0xfffe;
@@ -176,4 +191,210 @@ export function findFirstOnset(head: DecodedHead, opts?: { thresholdRatio?: numb
         }
     }
     return null;
+}
+
+function autocorrPitchHz(frame: Float32Array, sampleRate: number, minHz = 80, maxHz = 1000): number | null {
+    if (frame.length < 64) return null;
+    let mean = 0;
+    for (let i = 0; i < frame.length; i++) mean += frame[i];
+    mean /= frame.length;
+    const x = new Float32Array(frame.length);
+    let e0 = 0;
+    for (let i = 0; i < frame.length; i++) {
+        const v = frame[i] - mean;
+        x[i] = v;
+        e0 += v * v;
+    }
+    if (e0 <= 1e-9) return null;
+
+    const minLag = Math.max(1, Math.floor(sampleRate / maxHz));
+    const maxLag = Math.min(frame.length - 2, Math.floor(sampleRate / minHz));
+    if (maxLag <= minLag) return null;
+
+    let bestLag = -1;
+    let bestScore = -1;
+    for (let lag = minLag; lag <= maxLag; lag++) {
+        let num = 0;
+        let denB = 0;
+        const upper = frame.length - lag;
+        for (let i = 0; i < upper; i++) {
+            const a = x[i];
+            const b = x[i + lag];
+            num += a * b;
+            denB += b * b;
+        }
+        const den = denB > 0 ? Math.sqrt(e0 * denB) : 0;
+        const score = den > 0 ? num / den : 0;
+        if (score > bestScore) {
+            bestScore = score;
+            bestLag = lag;
+        }
+    }
+    if (bestLag <= 0 || bestScore < 0.35) return null;
+    return sampleRate / bestLag;
+}
+
+function hzToMidi(hz: number): number {
+    return Math.round(69 + 12 * Math.log2(Math.max(1e-6, hz) / 440));
+}
+
+export function extractGuideMelody(head: DecodedHead, opts?: { minNote?: number; maxNote?: number }): GuideNote[] {
+    const minNote = opts?.minNote ?? 45;
+    const maxNote = opts?.maxNote ?? 88;
+    const frameSize = Math.max(64, Math.floor(head.sampleRate * 0.04));
+    const hop = Math.max(16, Math.floor(head.sampleRate * 0.01));
+
+    const probeCount = Math.min(head.mono.length, head.sampleRate);
+    let probeEnergy = 0;
+    for (let i = 0; i < probeCount; i++) probeEnergy += head.mono[i] * head.mono[i];
+    const energyThreshold = Math.max(0.01, Math.sqrt(probeEnergy / Math.max(1, probeCount)) * 0.35);
+
+    const pitches: Array<number | null> = [];
+    for (let s = 0; s + frameSize <= head.mono.length; s += hop) {
+        const frame = head.mono.subarray(s, s + frameSize);
+        let e = 0;
+        for (let i = 0; i < frame.length; i++) e += frame[i] * frame[i];
+        const rms = Math.sqrt(e / frame.length);
+        if (rms < energyThreshold) {
+            pitches.push(null);
+            continue;
+        }
+        const hz = autocorrPitchHz(frame, head.sampleRate);
+        if (hz == null) {
+            pitches.push(null);
+            continue;
+        }
+        const p = hzToMidi(hz);
+        pitches.push(p >= minNote && p <= maxNote ? p : null);
+    }
+
+    // Median smooth voiced regions.
+    const smooth = pitches.slice();
+    for (let i = 0; i < pitches.length; i++) {
+        if (pitches[i] == null) continue;
+        const vals: number[] = [];
+        for (let j = Math.max(0, i - 2); j <= Math.min(pitches.length - 1, i + 2); j++) {
+            if (pitches[j] != null) vals.push(pitches[j] as number);
+        }
+        vals.sort((a, b) => a - b);
+        smooth[i] = vals[Math.floor(vals.length / 2)] ?? pitches[i];
+    }
+
+    const notes: GuideNote[] = [];
+    let curPitch: number | null = null;
+    let curStart = 0;
+    const flush = (endFrame: number): void => {
+        if (curPitch == null) return;
+        const startSec = (curStart * hop) / head.sampleRate;
+        const endSec = ((endFrame * hop) + frameSize) / head.sampleRate;
+        const dur = Math.max(0, endSec - startSec);
+        if (dur >= 0.08) {
+            notes.push({ pitch: curPitch, startSec, durationSec: dur, velocity: 100 });
+        }
+        curPitch = null;
+    };
+
+    for (let i = 0; i < smooth.length; i++) {
+        const p = smooth[i];
+        if (p == null) {
+            flush(i);
+            continue;
+        }
+        if (curPitch == null) {
+            curPitch = p;
+            curStart = i;
+            continue;
+        }
+        if (Math.abs(p - curPitch) <= 1) {
+            curPitch = Math.round(curPitch * 0.7 + p * 0.3);
+            continue;
+        }
+        flush(i);
+        curPitch = p;
+        curStart = i;
+    }
+    flush(smooth.length);
+    return notes;
+}
+
+export function guideSecondsToBeats(notes: GuideNote[], tempoBpm: number): Array<{ pitch: number; start: number; duration: number; velocity: number }> {
+    if (tempoBpm <= 0) throw new Error("tempoBpm must be > 0");
+    const bps = tempoBpm / 60;
+    return notes.map((n) => ({
+        pitch: n.pitch,
+        start: n.startSec * bps,
+        duration: n.durationSec * bps,
+        velocity: n.velocity,
+    }));
+}
+
+export function generateComplement(
+    guide: Array<{ pitch: number; start: number; duration: number; velocity: number }>,
+    options: ComplementOptions,
+): Array<{ pitch: number; start: number; duration: number; velocity: number }> {
+    if (guide.length === 0) return [];
+    const sim = Math.max(0, Math.min(1, options.similarity));
+    const den = Math.max(0, Math.min(1, options.density));
+    const rng = (() => {
+        let s = options.seed ?? ((Date.now() >>> 0) ^ 0x9e3779b9);
+        return () => {
+            s = (1664525 * s + 1013904223) >>> 0;
+            return s / 0x100000000;
+        };
+    })();
+
+    const range = options.register === "low" ? [36, 60] : options.register === "high" ? [67, 96] : [52, 76];
+    const intervals = [3, 4, 7, 9, -3, -4, -5, 10];
+    const out: Array<{ pitch: number; start: number; duration: number; velocity: number }> = [];
+    const avgDur = guide.reduce((a, n) => a + Math.max(0.05, n.duration), 0) / guide.length;
+    const delay = options.callResponse ? Math.min(0.5, Math.max(0.125, avgDur * 0.6)) : 0;
+
+    for (let i = 0; i < guide.length; i++) {
+        const g = guide[i];
+        if (rng() > den) continue;
+        let interval = intervals[i % intervals.length];
+        if (rng() > sim) interval = intervals[Math.floor(rng() * intervals.length)];
+        let p = g.pitch + interval;
+        if (Math.abs(p - g.pitch) <= 1) p += 3;
+        p = Math.max(range[0], Math.min(range[1], p));
+
+        let start = g.start + delay;
+        if (rng() > sim) {
+            const offs = [-0.125, 0, 0.125, 0.25];
+            start += offs[Math.floor(rng() * offs.length)] ?? 0;
+        }
+        start = Math.max(0, start);
+
+        let duration = g.duration * (options.callResponse ? 0.75 : 0.9);
+        if (rng() > sim) {
+            const mult = [0.5, 0.75, 1, 1.25];
+            duration *= mult[Math.floor(rng() * mult.length)] ?? 1;
+        }
+        duration = Math.max(0.05, duration);
+        const velocity = Math.max(1, Math.min(127, Math.round(g.velocity * 0.88 + (rng() * 16 - 8))));
+
+        out.push({ pitch: p, start, duration, velocity });
+    }
+
+    out.sort((a, b) => (a.start - b.start) || (a.pitch - b.pitch));
+    const cleaned: Array<{ pitch: number; start: number; duration: number; velocity: number }> = [];
+    for (const n of out) {
+        if (cleaned.length === 0) {
+            cleaned.push(n);
+            continue;
+        }
+        const prev = cleaned[cleaned.length - 1];
+        const prevEnd = prev.start + prev.duration;
+        if (n.start < prevEnd) {
+            if (n.velocity > prev.velocity) {
+                prev.duration = Math.max(0.05, n.start - prev.start);
+                cleaned.push(n);
+            } else {
+                cleaned.push({ ...n, start: prevEnd + 0.01 });
+            }
+        } else {
+            cleaned.push(n);
+        }
+    }
+    return cleaned;
 }

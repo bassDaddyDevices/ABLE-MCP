@@ -105,28 +105,28 @@ const SHIFT_DIALOG_HTML = `<!DOCTYPE html>
 </script></body></html>`;
 
 export function shiftDialogUrl(): string {
-    return "data:text/html;charset=utf-8," + encodeURIComponent(SHIFT_DIALOG_HTML);
+  return "data:text/html;charset=utf-8," + encodeURIComponent(SHIFT_DIALOG_HTML);
 }
 
 export interface ShiftParams {
-    time: number;     // beats
-    pitch: number;    // semitones
-    wrap: boolean;
+  time: number;     // beats
+  pitch: number;    // semitones
+  wrap: boolean;
 }
 
 export function parseShiftResult(raw: string): ShiftParams | null {
-    if (!raw) return null;
-    try {
-        const j: unknown = JSON.parse(raw);
-        if (!j || typeof j !== "object") return null;
-        const o = j as Record<string, unknown>;
-        const time = typeof o.time === "number" ? o.time : NaN;
-        const pitch = typeof o.pitch === "number" ? o.pitch : NaN;
-        if (!Number.isFinite(time) || !Number.isFinite(pitch)) return null;
-        return { time, pitch: Math.round(pitch), wrap: !!o.wrap };
-    } catch {
-        return null;
-    }
+  if (!raw) return null;
+  try {
+    const j: unknown = JSON.parse(raw);
+    if (!j || typeof j !== "object") return null;
+    const o = j as Record<string, unknown>;
+    const time = typeof o.time === "number" ? o.time : NaN;
+    const pitch = typeof o.pitch === "number" ? o.pitch : NaN;
+    if (!Number.isFinite(time) || !Number.isFinite(pitch)) return null;
+    return { time, pitch: Math.round(pitch), wrap: !!o.wrap };
+  } catch {
+    return null;
+  }
 }
 
 // --- Shared dialog chrome ----------------------------------------------
@@ -169,7 +169,7 @@ function ablePost(resultString){
 // --- Settings dialog ----------------------------------------------------
 
 function settingsHtml(currentJson: string): string {
-    return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>ABLE-MCP Settings</title>
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>ABLE-MCP Settings</title>
 <style>${COMMON_CSS}</style></head><body>
 <h2>ABLE-MCP &middot; SETTINGS</h2>
 <label>Provider</label>
@@ -235,28 +235,28 @@ function settingsHtml(currentJson: string): string {
 }
 
 export function settingsDialogUrl(currentConfig: unknown): string {
-    return "data:text/html;charset=utf-8," + encodeURIComponent(settingsHtml(JSON.stringify(currentConfig)));
+  return "data:text/html;charset=utf-8," + encodeURIComponent(settingsHtml(JSON.stringify(currentConfig)));
 }
 
 export interface SettingsResult {
-    provider: string;
-    apiKey: string;
-    model: string;
-    ollamaUrl?: string;
+  provider: string;
+  apiKey: string;
+  model: string;
+  ollamaUrl?: string;
 }
 
 export function parseSettingsResult(raw: string): SettingsResult | null {
-    if (!raw) return null;
-    try {
-        const j = JSON.parse(raw) as Partial<SettingsResult>;
-        if (typeof j.provider !== "string" || typeof j.model !== "string") return null;
-        return {
-            provider: j.provider,
-            apiKey: typeof j.apiKey === "string" ? j.apiKey : "",
-            model: j.model,
-            ollamaUrl: typeof j.ollamaUrl === "string" ? j.ollamaUrl : undefined,
-        };
-    } catch { return null; }
+  if (!raw) return null;
+  try {
+    const j = JSON.parse(raw) as Partial<SettingsResult>;
+    if (typeof j.provider !== "string" || typeof j.model !== "string") return null;
+    return {
+      provider: j.provider,
+      apiKey: typeof j.apiKey === "string" ? j.apiKey : "",
+      model: j.model,
+      ollamaUrl: typeof j.ollamaUrl === "string" ? j.ollamaUrl : undefined,
+    };
+  } catch { return null; }
 }
 
 // --- Ask dialog ---------------------------------------------------------
@@ -302,14 +302,108 @@ const ASK_DIALOG_HTML = `<!DOCTYPE html><html><head><meta charset="utf-8"><title
 </script></body></html>`;
 
 export function askDialogUrl(): string {
-    return "data:text/html;charset=utf-8," + encodeURIComponent(ASK_DIALOG_HTML);
+  return "data:text/html;charset=utf-8," + encodeURIComponent(ASK_DIALOG_HTML);
 }
 
 export function parseAskResult(raw: string): { prompt: string } | null {
-    if (!raw) return null;
-    try {
-        const j = JSON.parse(raw) as { prompt?: unknown };
-        if (typeof j.prompt !== "string" || !j.prompt.trim()) return null;
-        return { prompt: j.prompt };
-    } catch { return null; }
+  if (!raw) return null;
+  try {
+    const j = JSON.parse(raw) as { prompt?: unknown };
+    if (typeof j.prompt !== "string" || !j.prompt.trim()) return null;
+    return { prompt: j.prompt };
+  } catch { return null; }
+}
+
+// --- Vocal->MIDI complement dialog -------------------------------------
+
+const VOCAL_COMPLEMENT_DIALOG_HTML = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Vocal Complement</title>
+<style>${COMMON_CSS}
+  .row { display: flex; gap: 10px; }
+  .row > div { flex: 1; min-width: 0; }
+  .checkrow { margin-top: 10px; font-size: 11px; color: #bbb; user-select: none; }
+  .checkrow input { vertical-align: -2px; margin-right: 5px; }
+</style></head><body>
+<h2>ABLE-MCP &middot; VOCAL -> COMPLEMENT MIDI</h2>
+<div class="row">
+  <div>
+    <label>Similarity (0..1)</label>
+    <input type="text" id="similarity" value="0.55">
+  </div>
+  <div>
+    <label>Density (0..1)</label>
+    <input type="text" id="density" value="0.75">
+  </div>
+</div>
+<div class="row">
+  <div>
+    <label>Register</label>
+    <select id="register"><option value="low">Low</option><option value="mid" selected>Mid</option><option value="high">High</option></select>
+  </div>
+  <div>
+    <label>Target MIDI track index (-1 = auto)</label>
+    <input type="text" id="targetTrack" value="-1">
+  </div>
+</div>
+<label class="checkrow"><input type="checkbox" id="callResponse" checked>Call & response timing offset</label>
+<label>Seed (optional)</label>
+<input type="text" id="seed" placeholder="leave blank for random behavior">
+<div class="actions">
+  <button class="cancel" id="btnCancel">Cancel</button>
+  <button class="apply" id="btnApply">Generate</button>
+</div>
+<script>${POST_JS}
+(function(){
+  var $ = function(id){ return document.getElementById(id); };
+  function apply(){
+    ablePost(JSON.stringify({
+      similarity: parseFloat($('similarity').value),
+      density: parseFloat($('density').value),
+      register: $('register').value,
+      targetTrackIndex: parseInt($('targetTrack').value, 10),
+      callResponse: !!$('callResponse').checked,
+      seed: $('seed').value.trim() === '' ? null : parseInt($('seed').value, 10)
+    }));
+  }
+  $('btnApply').addEventListener('click', apply);
+  $('btnCancel').addEventListener('click', function(){ ablePost(''); });
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Enter') apply();
+    else if (e.key === 'Escape') ablePost('');
+  });
+})();
+</script></body></html>`;
+
+export function vocalComplementDialogUrl(): string {
+  return "data:text/html;charset=utf-8," + encodeURIComponent(VOCAL_COMPLEMENT_DIALOG_HTML);
+}
+
+export interface VocalComplementParams {
+  similarity: number;
+  density: number;
+  register: "low" | "mid" | "high";
+  targetTrackIndex: number;
+  callResponse: boolean;
+  seed: number | null;
+}
+
+export function parseVocalComplementResult(raw: string): VocalComplementParams | null {
+  if (!raw) return null;
+  try {
+    const j = JSON.parse(raw) as Record<string, unknown>;
+    const similarity = Number(j.similarity);
+    const density = Number(j.density);
+    const register = String(j.register ?? "mid");
+    const targetTrackIndex = Number(j.targetTrackIndex);
+    const seed = j.seed == null ? null : Number(j.seed);
+    return {
+      similarity: Number.isFinite(similarity) ? Math.max(0, Math.min(1, similarity)) : 0.55,
+      density: Number.isFinite(density) ? Math.max(0, Math.min(1, density)) : 0.75,
+      register: register === "low" || register === "high" ? register : "mid",
+      targetTrackIndex: Number.isFinite(targetTrackIndex) ? Math.trunc(targetTrackIndex) : -1,
+      callResponse: Boolean(j.callResponse),
+      seed: seed != null && Number.isFinite(seed) ? Math.trunc(seed) : null,
+    };
+  } catch {
+    return null;
+  }
 }

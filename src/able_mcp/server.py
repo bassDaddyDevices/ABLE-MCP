@@ -26,6 +26,7 @@ from . import project as project_mod
 from .als import analysis, parser
 from .lom import BridgeClient, BridgeError, BridgeUnavailable
 from .midi import analysis as midi_analysis
+from .midi import complement as midi_complement
 
 log = logging.getLogger("able_mcp")
 
@@ -493,6 +494,32 @@ async def live_arrangement_create_midi_clip(
     return {"applied": True, "action": "arrangement.createMidiClip", "result": result}
 
 
+@mcp.tool(
+    description=(
+        "Replace notes in an arrangement MIDI clip. notes is a list of dicts "
+        "with {pitch, start, duration, velocity, mute?}."
+    )
+)
+async def live_arrangement_set_clip_notes(
+    track_index: int,
+    arrangement_index: int,
+    notes: list[dict[str, Any]],
+    confirm: bool = True,
+) -> dict[str, Any]:
+    blocked = _require_confirm(confirm, "arrangement.setClipNotes")
+    if blocked is not None:
+        return blocked
+    result = await _bridge_call(
+        "arrangement.setClipNotes",
+        {
+            "track_index": track_index,
+            "arrangement_index": arrangement_index,
+            "notes": notes,
+        },
+    )
+    return {"applied": True, "action": "arrangement.setClipNotes", "result": result}
+
+
 @mcp.tool(description="Create a new scene. index defaults to -1 (append).")
 async def live_create_scene(index: int = -1, confirm: bool = True) -> dict[str, Any]:
     blocked = _require_confirm(confirm, "scene.create")
@@ -559,6 +586,218 @@ def midi_guess_chords(
     live_set = parser.parse(p)
     clip = live_set.tracks[track_index].clips[clip_index]
     return midi_analysis.guess_chords(clip.notes, window_beats=window_beats)
+
+
+@mcp.tool(
+    description=(
+        "Extract a monophonic guide melody from a vocal WAV file with a "
+        "dependency-free pitch tracker. Returns notes in both seconds and "
+        "beats (requires tempo_bpm)."
+    )
+)
+def midi_extract_vocal_guide(
+    file_path: str,
+    tempo_bpm: float,
+    min_note: int = 45,
+    max_note: int = 88,
+    frame_ms: float = 40.0,
+    hop_ms: float = 10.0,
+    min_note_sec: float = 0.08,
+) -> dict[str, Any]:
+    notes, summary = midi_complement.extract_guide_melody_from_wav(
+        file_path=file_path,
+        min_note=min_note,
+        max_note=max_note,
+        frame_ms=frame_ms,
+        hop_ms=hop_ms,
+        min_note_sec=min_note_sec,
+    )
+    notes_beats = midi_complement.seconds_notes_to_beats(notes, tempo_bpm=tempo_bpm)
+    notes_sec = [
+        {
+            "pitch": n.pitch,
+            "start_sec": n.start_sec,
+            "duration_sec": n.duration_sec,
+            "velocity": n.velocity,
+        }
+        for n in notes
+    ]
+    return {
+        "file_path": str(Path(file_path).expanduser()),
+        "tempo_bpm": tempo_bpm,
+        "summary": asdict(summary),
+        "notes_seconds": notes_sec,
+        "notes_beats": notes_beats,
+    }
+
+
+@mcp.tool(
+    description=(
+        "Generate a complementary MIDI melody (not a duplicate) from guide "
+        "notes in beat-space. Input note dicts: {pitch,start,duration,velocity?}."
+    )
+)
+def midi_generate_complement(
+    guide_notes: list[dict[str, Any]],
+    similarity: float = 0.55,
+    density: float = 0.75,
+    register: str = "mid",
+    call_response: bool = True,
+    seed: int | None = None,
+) -> dict[str, Any]:
+    generated = midi_complement.generate_complementary_melody(
+        guide_notes=guide_notes,
+        similarity=similarity,
+        density=density,
+        register=register,
+        call_response=call_response,
+        seed=seed,
+    )
+    return {
+        "guide_count": len(guide_notes),
+        "generated_count": len(generated),
+        "notes": generated,
+        "settings": {
+            "similarity": max(0.0, min(1.0, similarity)),
+            "density": max(0.0, min(1.0, density)),
+            "register": register,
+            "call_response": call_response,
+            "seed": seed,
+        },
+    }
+
+
+@mcp.tool(
+    description=(
+        "Convenience one-shot: extract vocal guide from WAV and immediately "
+        "generate a complementary MIDI melody in beat-space."
+    )
+)
+def midi_vocal_to_complement(
+    file_path: str,
+    tempo_bpm: float,
+    similarity: float = 0.55,
+    density: float = 0.75,
+    register: str = "mid",
+    call_response: bool = True,
+    seed: int | None = None,
+) -> dict[str, Any]:
+    extracted = midi_extract_vocal_guide(file_path=file_path, tempo_bpm=tempo_bpm)
+    generated = midi_generate_complement(
+        guide_notes=extracted["notes_beats"],
+        similarity=similarity,
+        density=density,
+        register=register,
+        call_response=call_response,
+        seed=seed,
+    )
+    return {
+        "extraction": {
+            "summary": extracted["summary"],
+            "notes_beats": extracted["notes_beats"],
+        },
+        "complement": generated,
+    }
+
+
+@mcp.tool(
+    description=(
+        "End-to-end live flow: render audio from an arrangement audio track "
+        "range, extract vocal guide, generate complementary melody, create a "
+        "new arrangement MIDI clip, and write notes into it."
+    )
+)
+async def live_vocal_to_complement_midi(
+    source_audio_track_index: int,
+    start_time: float,
+    end_time: float,
+    target_midi_track_index: int,
+    similarity: float = 0.55,
+    density: float = 0.75,
+    register: str = "mid",
+    call_response: bool = True,
+    seed: int | None = None,
+    clip_name: str = "Vocal Complement",
+    confirm: bool = True,
+) -> dict[str, Any]:
+    blocked = _require_confirm(confirm, "live_vocal_to_complement_midi")
+    if blocked is not None:
+        return blocked
+    if end_time <= start_time:
+        raise ValueError("end_time must be greater than start_time")
+
+    # 1) Render source audio region to WAV via extension bridge.
+    rendered = await _bridge_call(
+        "audio.renderTrack",
+        {
+            "track_index": source_audio_track_index,
+            "start_time": start_time,
+            "end_time": end_time,
+        },
+    )
+    wav_path = rendered.get("wav_path")
+    if not isinstance(wav_path, str) or not wav_path:
+        raise RuntimeError("audio.renderTrack did not return wav_path")
+
+    # 2) Get tempo from Live and extract guide + complement notes.
+    tempo_res = await _bridge_call("song.getTempo")
+    tempo = float(tempo_res.get("tempo", 120.0))
+    pipeline = midi_vocal_to_complement(
+        file_path=wav_path,
+        tempo_bpm=tempo,
+        similarity=similarity,
+        density=density,
+        register=register,
+        call_response=call_response,
+        seed=seed,
+    )
+    notes = pipeline["complement"]["notes"]
+
+    # 3) Create destination arrangement clip and write notes.
+    duration = end_time - start_time
+    created = await _bridge_call(
+        "arrangement.createMidiClip",
+        {
+            "track_index": target_midi_track_index,
+            "start_time": start_time,
+            "duration": duration,
+            "name": clip_name,
+        },
+    )
+    arrangement_index = created.get("arrangement_index")
+    if not isinstance(arrangement_index, int) or arrangement_index < 0:
+        raise RuntimeError("arrangement.createMidiClip did not return arrangement_index")
+
+    await _bridge_call(
+        "arrangement.setClipNotes",
+        {
+            "track_index": target_midi_track_index,
+            "arrangement_index": arrangement_index,
+            "notes": notes,
+        },
+    )
+
+    return {
+        "applied": True,
+        "action": "live_vocal_to_complement_midi",
+        "source": {
+            "track_index": source_audio_track_index,
+            "start_time": start_time,
+            "end_time": end_time,
+            "wav_path": wav_path,
+            "tempo": tempo,
+        },
+        "target": {
+            "track_index": target_midi_track_index,
+            "arrangement_index": arrangement_index,
+            "clip_name": clip_name,
+        },
+        "extraction": pipeline["extraction"],
+        "complement": {
+            "generated_count": pipeline["complement"]["generated_count"],
+            "settings": pipeline["complement"]["settings"],
+        },
+    }
 
 
 # ---------------------------------------------------------------------------

@@ -10,13 +10,22 @@ import {
     AudioClip,
     AudioTrack,
     Clip,
+    MidiTrack,
     type ExtensionContext,
     type Handle,
+    type NoteDescription,
 } from "@ableton-extensions/sdk";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { findFirstOnset, readWavHead } from "./wav";
+import {
+    extractGuideMelody,
+    findFirstOnset,
+    generateComplement,
+    guideSecondsToBeats,
+    readWavHead,
+} from "./wav";
+import { parseVocalComplementResult, vocalComplementDialogUrl } from "./dialogs";
 
 type Ctx = ExtensionContext<"1.0.0">;
 
@@ -300,6 +309,102 @@ async function snapFirstHitInner(api: Ctx, clip: AudioClip<"1.0.0">): Promise<vo
     }
 }
 
+function findTrackIndex(api: Ctx, track: AudioTrack<"1.0.0">): number {
+    return api.application.song.tracks.indexOf(track);
+}
+
+async function generateComplementFromVocal(api: Ctx, clip: AudioClip<"1.0.0">): Promise<void> {
+    const track = getAudioTrack(clip);
+    if (!track) return;
+    const raw = await api.ui.showModalDialog(vocalComplementDialogUrl(), 520, 340);
+    const params = parseVocalComplementResult(raw);
+    if (!params) return;
+
+    const song = api.application.song;
+    const sourceTrackIndex = findTrackIndex(api, track);
+    const startTime = clip.startTime;
+    const duration = clip.duration ?? 0;
+    if (duration <= 0.01) {
+        console.error("[able-mcp] vocal->midi: clip duration too small");
+        return;
+    }
+    const endTime = startTime + duration;
+
+    // 1) Render source region to WAV from this track.
+    const wavPath = await api.resources.renderPreFxAudio(track, startTime, endTime);
+    const head = readWavHead(wavPath, Math.max(1, Math.min(30, duration * 60 / Math.max(song.tempo, 1))));
+    if (!head) {
+        console.error("[able-mcp] vocal->midi: failed to decode rendered wav");
+        return;
+    }
+
+    // 2) Extract guide + generate complement (relative to clip start in beats).
+    const guideSec = extractGuideMelody(head);
+    if (guideSec.length === 0) {
+        console.error("[able-mcp] vocal->midi: no guide notes extracted");
+        return;
+    }
+    const guideBeatsAbs = guideSecondsToBeats(guideSec, song.tempo || 120);
+    const guideRel = guideBeatsAbs
+        .map((n) => ({ ...n, start: Math.max(0, n.start) }))
+        .map((n) => ({
+            ...n,
+            start: Math.max(0, n.start),
+            duration: Math.max(0.05, n.duration),
+        }));
+    const compRel = generateComplement(guideRel, {
+        similarity: params.similarity,
+        density: params.density,
+        register: params.register,
+        callResponse: params.callResponse,
+        seed: params.seed,
+    }).map((n) => ({
+        pitch: n.pitch,
+        start: Math.max(0, Math.min(duration - 0.01, n.start)),
+        duration: Math.max(0.05, Math.min(n.duration, duration - Math.max(0, Math.min(duration - 0.01, n.start)))),
+        velocity: n.velocity,
+    }));
+
+    if (compRel.length === 0) {
+        console.error("[able-mcp] vocal->midi: complement generation produced no notes");
+        return;
+    }
+
+    // 3) Resolve target MIDI track (auto or explicit).
+    let target: MidiTrack<"1.0.0"> | null = null;
+    if (params.targetTrackIndex >= 0) {
+        const t = song.tracks[params.targetTrackIndex];
+        if (t instanceof MidiTrack) target = t;
+    }
+    if (!target) {
+        for (const t of song.tracks) {
+            if (t instanceof MidiTrack) {
+                target = t;
+                break;
+            }
+        }
+    }
+    if (!target) {
+        target = await song.createMidiTrack();
+    }
+
+    // 4) Create arrangement clip and write notes.
+    const outClip = await target.createMidiClip(startTime, duration);
+    const notes: NoteDescription[] = compRel.map((n) => ({
+        pitch: Math.max(0, Math.min(127, Math.round(n.pitch))),
+        startTime: n.start,
+        duration: Math.max(0.05, n.duration),
+        velocity: Math.max(1, Math.min(127, Math.round(n.velocity))),
+    }));
+    api.withinTransaction(() => {
+        outClip.notes = notes;
+        outClip.name = `${clip.name || "Vocal"} complement`;
+    });
+    console.log(
+        `[able-mcp] vocal->midi: srcTrack=${sourceTrackIndex} start=${startTime} dur=${duration} extracted=${guideSec.length} generated=${notes.length}`,
+    );
+}
+
 export async function registerAudioClipActions(api: Ctx): Promise<void> {
     dbg(`registerAudioClipActions: build=${new Date().toISOString()} log=${LOG_PATH}`);
     for (const def of CHOPS) {
@@ -333,5 +438,22 @@ export async function registerAudioClipActions(api: Ctx): Promise<void> {
         );
     } catch (e) {
         console.error("[able-mcp] register Snap first hit failed:", e);
+    }
+
+    api.commands.registerCommand("able-mcp.audio.vocal2midi", (arg: unknown) => {
+        const clip = asAudioClip(api, arg);
+        if (!clip) return;
+        void generateComplementFromVocal(api, clip).catch((e) => {
+            console.error("[able-mcp] vocal->midi failed:", e);
+        });
+    });
+    try {
+        await api.ui.registerContextMenuAction(
+            "AudioClip",
+            "ABLE-MCP: Create complementary MIDI from vocal...",
+            "able-mcp.audio.vocal2midi",
+        );
+    } catch (e) {
+        console.error("[able-mcp] register Vocal->MIDI failed:", e);
     }
 }

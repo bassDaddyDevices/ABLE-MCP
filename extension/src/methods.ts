@@ -346,12 +346,41 @@ export function buildMethods(context: Ctx, protocolVersion: string): RpcMethodTa
             const duration = asNumber(params["duration"], "duration");
             const track = requireMidiTrack(ti);
             const clip = await track.createMidiClip(startTime, duration);
+            const arrangementIndex = track.arrangementClips.indexOf(clip);
             if (typeof params["name"] === "string") {
                 context.withinTransaction(() => {
                     clip.name = params["name"] as string;
                 });
             }
-            return { track_index: ti, start_time: startTime, duration, name: clip.name };
+            return {
+                track_index: ti,
+                arrangement_index: arrangementIndex,
+                start_time: startTime,
+                duration,
+                name: clip.name,
+            };
+        },
+
+        "arrangement.setClipNotes": (params) => {
+            const ti = asInt(params["track_index"], "track_index");
+            const ai = asInt(params["arrangement_index"], "arrangement_index");
+            const ns = (params["notes"] as unknown[]) ?? [];
+            const track = requireMidiTrack(ti);
+            const clip = track.arrangementClips[ai];
+            if (!clip || !("notes" in clip)) {
+                throw new Error(`no arrangement MIDI clip at index ${ai}`);
+            }
+            const notes: NoteDescription[] = (ns as Array<Record<string, unknown>>).map((n) => ({
+                pitch: asInt(n["pitch"], "note.pitch"),
+                startTime: asNumber(n["start"] ?? n["startTime"] ?? 0, "note.start"),
+                duration: asNumber(n["duration"], "note.duration"),
+                velocity: n["velocity"] !== undefined ? asNumber(n["velocity"], "note.velocity") : 100,
+                muted: Boolean(n["mute"] ?? n["muted"] ?? false),
+            }));
+            context.withinTransaction(() => {
+                (clip as import("@ableton-extensions/sdk").MidiClip<"1.0.0">).notes = notes;
+            });
+            return { added: notes.length, track_index: ti, arrangement_index: ai };
         },
 
         "scene.create": async (params) => {

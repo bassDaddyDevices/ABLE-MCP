@@ -1,13 +1,13 @@
 # ABLE-MCP
 
-Right-click MIDI tools for Ableton Live 12, plus an MCP server for `.als` analysis.
+Right-click MIDI and audio tools for Ableton Live 12, plus an MCP server for `.als` analysis and live bridge orchestration.
 
 Two artifacts in one repo:
 
-1. **AbleMCP.ablx** — a native Ableton Live 12 extension. Drag it in, right-click any MIDI clip, get 17 instant transformations. No Python, no LLM, no API key, no internet, no waiting.
+1. **AbleMCP.ablx** — a native Ableton Live 12 extension. Drag it in, right-click clips, get fast deterministic transformations and vocal-to-complement generation. No API key, no cloud dependency.
 2. **`able-mcp` (Python)** — an MCP server for parsing and analyzing `.als` project files offline. Plug into Claude Desktop / VS Code / Cursor and ask questions about your sets.
 
-## The extension (ship target for v0.1.0)
+## The extension (shipping in v0.2)
 
 Built on `@ableton-extensions/sdk` 1.0.0-beta.0. Runs inside Live's own process — not Max for Live. Tested on Live 12.4.5b3.
 
@@ -24,30 +24,38 @@ Right-click any MIDI clip (session or arrangement) → **ABLE-MCP** menu:
 
 | Action | What it does |
 |---|---|
-| Variation | 30% chance per note: bump ±octave; 15% chance: drop the note. |
-| Octave double | Add a quieter octave-up layer. |
-| Humanize | Jitter timing ±0.05 beats and velocity ±10. |
-| Reverse | Mirror notes around the clip's midpoint in time. |
-| Invert (mirror) | Mirror pitch around the median note. |
-| Transpose +1 / -1 | Semitone up / down. |
-| Legato | Extend each pitch's note to the next one's start. |
-| Staccato | Cut every note to 25% of its length. |
-| Thin (every other) | Drop every other note in time order. |
-| Double-time | Compress timing 2× and play the pattern twice. |
-| Half-time | Stretch to 2×; first half plays at half speed. |
-| Strum chords | Stagger simultaneous notes by 1/64 each (instant strum). |
-| Accent downbeats | Boost on-beat notes, duck off-beat. |
-| Top voice only | Keep the highest note of each chord. |
-| Bass voice (drop 8va) | Keep the lowest note of each chord, drop an octave. |
-| **Shift…** | Modal: shift notes by N beats and/or N semitones, with optional wrap-around. Quick-bump preset buttons for common values. |
+| ABLE-MCP: Variation | 30% chance per note: bump ±octave; 15% chance: drop the note. |
+| ABLE-MCP: Octave double | Add a quieter octave-up layer. |
+| ABLE-MCP: Humanize | Jitter timing ±0.05 beats and velocity ±10. |
+| ABLE-MCP: Reverse | Mirror notes around the clip's midpoint in time. |
+| ABLE-MCP: Invert (mirror) | Mirror pitch around the median note. |
+| ABLE-MCP: Transpose +1 / ABLE-MCP: Transpose -1 | Semitone up / down. |
+| ABLE-MCP: Legato | Extend each pitch's note to the next one's start. |
+| ABLE-MCP: Staccato | Cut every note to 25% of its length. |
+| ABLE-MCP: Thin (every other) | Drop every other note in time order. |
+| ABLE-MCP: Double-time | Compress timing 2× and play the pattern twice. |
+| ABLE-MCP: Half-time | Stretch to 2×; first half plays at half speed. |
+| ABLE-MCP: Strum chords | Stagger simultaneous notes by 1/64 each (instant strum). |
+| ABLE-MCP: Accent downbeats | Boost on-beat notes, duck off-beat. |
+| ABLE-MCP: Top voice only | Keep the highest note of each chord. |
+| ABLE-MCP: Bass voice (drop 8va) | Keep the lowest note of each chord, drop an octave. |
+| ABLE-MCP: Shift… | Modal: shift notes by N beats and/or N semitones, with optional wrap-around. Quick-bump preset buttons for common values. |
 
 Every action also works on **time-range selections in arrangement view** — right-click a selection across one or more MIDI tracks and pick `ABLE-MCP (range): …`. Only notes inside the range are transformed.
+
+Right-click any **audio clip** in arrangement view:
+
+| Action | What it does |
+|---|---|
+| ABLE-MCP: Chop into beats (1/4 bar) / 1/2 / 1 / 2 / 4 / 8 bars | Splits a long audio clip into adjacent cropped chunks without rewriting source audio. |
+| ABLE-MCP: Snap first hit to bar | Detects first onset in WAV and repositions crop/start so the first hit lands on a downbeat. |
+| ABLE-MCP: Create complementary MIDI from vocal... | Renders the clip range, extracts guide melody from audio, generates a complementary line, and writes a new arrangement MIDI clip (modal controls: similarity, density, register, call/response, seed, target track). |
 
 Every action is a single Cmd-Z undo.
 
 ### Why it's fast
 
-These are pure deterministic functions running in-process. Typical action: **~1ms**. No LLM call, no JSON round-trip, no network, no cost per click. The intelligence lives in the transform, not in a chat window.
+Core MIDI/audio actions are pure deterministic functions running in-process. Typical transform actions are near-instant and fully undoable. No LLM call is required for the shipping extension feature set.
 
 ### Building from source
 
@@ -111,12 +119,17 @@ uv run able-mcp
 | `als_list_clips(path, track_index?)` | Clip metadata across one or all tracks. |
 | `als_extract_midi(path, track_index, clip_index)` | Note-level MIDI dump. |
 | `als_find_unfinished(path)` | Heuristic suggestions for things that look incomplete. |
+| `midi_extract_vocal_guide(file_path, tempo_bpm, ...)` | Extract monophonic guide melody from vocal WAV. |
+| `midi_generate_complement(guide_notes, ...)` | Generate complementary (not duplicated) MIDI line. |
+| `midi_vocal_to_complement(file_path, tempo_bpm, ...)` | One-shot extraction + complement generation pipeline. |
+| `live_arrangement_set_clip_notes(...)` | Replace notes in arrangement MIDI clip by index. |
+| `live_vocal_to_complement_midi(...)` | Render audio range in Live, generate complement, create/write arrangement MIDI clip in one call. |
 
 ## Roadmap
 
-- **v0.2** — bring back the Ask-AI flow with persisted API key (Anthropic / OpenAI / Google / Ollama). The scaffolding is already in [extension/src/llm.ts](extension/src/llm.ts) and [extension/src/config.ts](extension/src/config.ts), pulled from v1 to keep the release tight.
-- **v0.3** — extension ↔ MCP-server bridge. The extension already runs a localhost WebSocket JSON-RPC server on `127.0.0.1:9831`; the Python side just needs to consume it for read/write tools.
-- **v0.4** — audio-clip primitives (the `audioclipactions.ts` + `wav.ts` work is in tree, gated off until the chop-on-arrangement bug is solved).
+- **v0.2.x** — tighten vocal-to-complement quality (better vibrato handling, stronger anti-unison controls, warped-clip timing support).
+- **v0.3** — richer bridge orchestration tools (multi-clip workflows and arrangement/session interoperability).
+- **v0.4** — expand deterministic composition primitives (scale quantize, swing, density, stutter, chord-tone targeting).
 
 ## Develop
 
