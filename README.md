@@ -72,19 +72,35 @@ Python 3.11, stdio transport. Parses Live's gzipped `.als` files and exposes str
 
 ### Install
 
+Option A — local clone:
+
 ```sh
 uv sync
 ```
 
+Option B — run directly from GitHub (no PyPI required):
+
+```sh
+uvx --from git+https://github.com/bassDaddyDevices/ABLE-MCP@v0.2.0 able-mcp
+```
+
 ### Run
+
+Local clone:
 
 ```sh
 uv run able-mcp
 ```
 
+GitHub source (one-shot):
+
+```sh
+uvx --from git+https://github.com/bassDaddyDevices/ABLE-MCP@v0.2.0 able-mcp
+```
+
 ### Hook into a client
 
-**Claude Desktop** — `~/Library/Application Support/Claude/claude_desktop_config.json`:
+**Claude Desktop (local clone)** — `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```json
 {
@@ -97,7 +113,24 @@ uv run able-mcp
 }
 ```
 
-**VS Code (Copilot Chat)** — your user or workspace `mcp.json`:
+**Claude Desktop (GitHub source, no PyPI)**:
+
+```json
+{
+  "mcpServers": {
+    "able-mcp": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/bassDaddyDevices/ABLE-MCP@v0.2.0",
+        "able-mcp"
+      ]
+    }
+  }
+}
+```
+
+**VS Code (Copilot Chat, local clone)** — your user or workspace `mcp.json`:
 
 ```json
 {
@@ -105,6 +138,23 @@ uv run able-mcp
     "able-mcp": {
       "command": "uv",
       "args": ["--directory", "/absolute/path/to/ABLE-MCP", "run", "able-mcp"]
+    }
+  }
+}
+```
+
+**VS Code (Copilot Chat, GitHub source, no PyPI)**:
+
+```json
+{
+  "servers": {
+    "able-mcp": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/bassDaddyDevices/ABLE-MCP@v0.2.0",
+        "able-mcp"
+      ]
     }
   }
 }
